@@ -1,0 +1,9 @@
+#PyCharm Project Files
+/.idea
+/.ideau
+/.ideaw
+#ignore data
+/VOCdevkit_2007
+*.tar
+#ignore models
+*.pth
