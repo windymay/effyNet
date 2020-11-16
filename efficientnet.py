@@ -33,14 +33,14 @@ class MBConv(nn.Module):
                 # Conv1x1, BN, Relu     HxWxF -> HxWx channel_factor*F
                 nn.Conv2d(C_in, C_in * f, kernel_size=1, stride=1, bias=False),
                 nn.BatchNorm2d(C_in * f, eps=1e-3),
-                Swish()
+                nn.SiLU()
             )
         if not se:
             self.block = nn.Sequential(
                 # DWConv3x3, BN, Relu   HxWx channel_factor*F -> HxWx channel_factor*F
                 nn.Conv2d(C_in * f, C_in * f, kernel_size=k, stride=s, padding=k // 2, groups=C_in * f, bias=False),
                 nn.BatchNorm2d(C_in * f, eps=1e-3),
-                Swish(),
+                nn.SiLU(),
                 # Conv1x1, BN   HxWx channel_factor*F -> HxWxF
                 nn.Conv2d(C_in * f, C_out, kernel_size=1, stride=1, bias=False),
                 nn.BatchNorm2d(C_out, eps=1e-3),
@@ -50,11 +50,11 @@ class MBConv(nn.Module):
                 # DWConv3x3, BN, Relu   HxWx channel_factor*F -> HxWx channel_factor*F
                 nn.Conv2d(C_in * f, C_in * f, kernel_size=k, stride=s, padding=k // 2, groups=C_in * f, bias=False),
                 nn.BatchNorm2d(C_in * f, eps=1e-3),
-                Swish(),
+                nn.SiLU(),
                 # squeeze-and-excitation， SE_Ratio = 0.25, SE_channel = C_in//4
                 nn.AdaptiveAvgPool2d(1),
                 nn.Conv2d(C_in * f, C_in // 4, kernel_size=1, stride=1),
-                Swish(),
+                nn.SiLU(),
                 nn.Conv2d(C_in // 4, C_in * f, kernel_size=1, stride=1),
                 nn.Sigmoid(),
             )
@@ -91,7 +91,7 @@ class Final_Layer(nn.Module):
         self.block = nn.Sequential(
             nn.Conv2d(C_in, C_out, kernel_size=1, stride=1,bias=False),
             nn.BatchNorm2d(C_out,eps=1e-3),
-            Swish(),
+            nn.SiLU(),
             nn.AdaptiveAvgPool2d(1), #flatten here
             nn.Dropout(p=0.2),
             nn.Linear(C_out, n_class),
@@ -138,7 +138,7 @@ class EfficientNet_B0(nn.Module):
         self.bn_f = nn.BatchNorm2d(1280, eps=1e-3)
         self.dropout_f = nn.Dropout(p=0.2)
         self.fc = nn.Linear(1280,n_class)
-        self.swish = Swish()
+        self.swish = nn.SiLU()
 
         self._initialize_weights()
 
