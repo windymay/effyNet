@@ -132,7 +132,13 @@ class EfficientNet_B0(nn.Module):
         # MBConv6, k5x5, 14x14x192 -> 7x7x320, channel_factor=6 
         self.stage8 = MBConv(k=3, f=6, s=2, C_in=192, C_out=320, se=True)
         # Conv1x1 & Pooling & FC, 7x7x320 -> 7x7x1280
-        self.stage9 = Final_Layer(C_in=320, C_out=1280, n_class=n_class)
+        # self.stage9 = Final_Layer(C_in=320, C_out=1280, n_class=n_class)
+        self.conv_f = nn.Conv2d(320, 1280, kernel_size=1, stride=1, bias=False)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.bn_f = nn.BatchNorm2d(1280, eps=1e-3)
+        self.dropout_f = nn.Dropout(p=0.2)
+        self.fc = nn.Linear(1280,n_class)
+        self.swish = Swish()
 
         self._initialize_weights()
 
@@ -154,6 +160,7 @@ class EfficientNet_B0(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
+        # feature extraction
         x = self.stage1(x)
         x = self.stage2(x)
         x = self.stage3(x)
@@ -162,5 +169,12 @@ class EfficientNet_B0(nn.Module):
         x = self.stage6(x)
         x = self.stage7(x)
         x = self.stage8(x)
-        x = self.stage9(x)
+
+        # final block
+        x = self.swish(self.bn_f(self.conv_f(x)))
+        x = self.avgpool(x)
+        x = x.flatten(start_dim=1)
+        x = self.dropout_f(x)
+        x = self.fc(x)
+
         return x
