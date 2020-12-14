@@ -1,10 +1,5 @@
 import torch
 import torch.nn as nn
-from efficientnet_pytorch import efficientnet
-
-class Swish(nn.Module):
-    def forward(self, x):
-        return x * torch.sigmoid(x)
 
 
 # Conv 3x3 block
@@ -12,9 +7,12 @@ class Conv3x3(nn.Module):
     def __init__(self, C_in, C_out, k, s, p):
         super(Conv3x3, self).__init__()
         self.conv = nn.Conv2d(C_in, C_out, kernel_size=k, stride=s, padding=p)
+        # add? 
+        self.bn0 = nn.BatchNorm2d(C_out, momentum=0.01, eps=1e-3)
+        self.Swish = nn.SiLU()
 
     def forward(self, x):
-        x = self.conv(x)
+        x = self.Swish(self.bn0(self.conv(x)))
         return x
 
 
@@ -23,34 +21,43 @@ class MBConv(nn.Module):
     def __init__(self, k, f, s, C_in, C_out, se):
         super(MBConv, self).__init__()
         self.se = se
-        self.f = f
+        self.f = f  # expansion ratio
         self.stride = s
         self.cin = C_in
         self.cout = C_out
 
+        # expansion ratio not 1
         if f != 1:
             self.expand = nn.Sequential(
                 # Conv1x1, BN, Relu     HxWxF -> HxWx channel_factor*F
                 nn.Conv2d(C_in, C_in * f, kernel_size=1, stride=1, bias=False),
-                nn.BatchNorm2d(C_in * f, eps=1e-3),
+                nn.BatchNorm2d(C_in * f, momentum=0.01, eps=1e-3),
                 nn.SiLU()
             )
+
+        # no Squeeze and Excitation layer
         if not se:
             self.block = nn.Sequential(
+                # Depthwise convolution
                 # DWConv3x3, BN, Relu   HxWx channel_factor*F -> HxWx channel_factor*F
                 nn.Conv2d(C_in * f, C_in * f, kernel_size=k, stride=s, padding=k // 2, groups=C_in * f, bias=False),
-                nn.BatchNorm2d(C_in * f, eps=1e-3),
+                nn.BatchNorm2d(C_in * f, momentum=0.01, eps=1e-3),
                 nn.SiLU(),
+
+                # Pointwise convolution
                 # Conv1x1, BN   HxWx channel_factor*F -> HxWxF
                 nn.Conv2d(C_in * f, C_out, kernel_size=1, stride=1, bias=False),
-                nn.BatchNorm2d(C_out, eps=1e-3),
+                nn.BatchNorm2d(C_out, momentum=0.01, eps=1e-3),
             )
+
+        # Squeeze and Excitation layer
         else:
             self.block_se1 = nn.Sequential(
                 # DWConv3x3, BN, Relu   HxWx channel_factor*F -> HxWx channel_factor*F
                 nn.Conv2d(C_in * f, C_in * f, kernel_size=k, stride=s, padding=k // 2, groups=C_in * f, bias=False),
-                nn.BatchNorm2d(C_in * f, eps=1e-3),
+                nn.BatchNorm2d(C_in * f, momentum=0.01, eps=1e-3),
                 nn.SiLU(),
+
                 # squeeze-and-excitation， SE_Ratio = 0.25, SE_channel = C_in//4
                 nn.AdaptiveAvgPool2d(1),
                 nn.Conv2d(C_in * f, C_in // 4, kernel_size=1, stride=1),
@@ -61,7 +68,7 @@ class MBConv(nn.Module):
             self.block_se2 = nn.Sequential(
                 # Conv1x1, BN   HxWx channel_factor*F -> HxWxF
                 nn.Conv2d(C_in * f, C_out, kernel_size=1, stride=1, bias=False),
-                nn.BatchNorm2d(C_out, eps=1e-3),
+                nn.BatchNorm2d(C_out, momentum=0.01, eps=1e-3),
             )
 
     def forward(self, inputs):
@@ -81,24 +88,6 @@ class MBConv(nn.Module):
         #skip connection
         if self.stride == 1 and self.cin == self.cout:
             x = x + inputs
-        return x
-
-
-# Conv1x1 & Pooling & FC
-class Final_Layer(nn.Module):
-    def __init__(self, C_in, C_out, n_class):
-        super(Final_Layer, self).__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(C_in, C_out, kernel_size=1, stride=1,bias=False),
-            nn.BatchNorm2d(C_out,eps=1e-3),
-            nn.SiLU(),
-            nn.AdaptiveAvgPool2d(1), #flatten here
-            nn.Dropout(p=0.2),
-            nn.Linear(C_out, n_class),
-        )
-
-    def forward(self, x):
-        x = self.block(x)
         return x
 
 
@@ -131,33 +120,35 @@ class EfficientNet_B0(nn.Module):
                                     MBConv(k=5, f=6, s=1, C_in=192, C_out=192, se=True))
         # MBConv6, k5x5, 14x14x192 -> 7x7x320, channel_factor=6 
         self.stage8 = MBConv(k=3, f=6, s=2, C_in=192, C_out=320, se=True)
+        
+        # Final Layer
         # Conv1x1 & Pooling & FC, 7x7x320 -> 7x7x1280
-        # self.stage9 = Final_Layer(C_in=320, C_out=1280, n_class=n_class)
         self.conv_f = nn.Conv2d(320, 1280, kernel_size=1, stride=1, bias=False)
+        self.bn_f = nn.BatchNorm2d(1280, momentum=0.01, eps=1e-3)
+
         self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.bn_f = nn.BatchNorm2d(1280, eps=1e-3)
         self.dropout_f = nn.Dropout(p=0.2)
-        self.fc = nn.Linear(1280,n_class)
+        self.fc = nn.Linear(1280, n_class)
         self.swish = nn.SiLU()
 
-        self._initialize_weights()
+    #     self._initialize_weights()
 
-    def _initialize_weights(self):
-        """
-        Kaimin initialization on conv layer, normal initialization on fc layer,
-        constant initialization on batchnorm layer
-        """
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
+    # def _initialize_weights(self):
+    #     """
+    #     Kaimin initialization on conv layer, normal initialization on fc layer,
+    #     constant initialization on batchnorm layer
+    #     """
+    #     for m in self.modules():
+    #         if isinstance(m, nn.Conv2d):
+    #             nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+    #             if m.bias is not None:
+    #                 nn.init.constant_(m.bias, 0)
+    #         elif isinstance(m, nn.BatchNorm2d):
+    #             nn.init.constant_(m.weight, 1)
+    #             nn.init.constant_(m.bias, 0)
+    #         elif isinstance(m, nn.Linear):
+    #             nn.init.normal_(m.weight, 0, 0.01)
+    #             nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         # feature extraction
