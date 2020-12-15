@@ -5,5 +5,7 @@
 #ignore data
 /VOCdevkit_2007
 *.tar
+/data
+*.tar.gz
 #ignore models
 *.pth
