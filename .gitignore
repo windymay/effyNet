@@ -9,3 +9,5 @@
 *.tar.gz
 #ignore models
 *.pth
+#complie
+*.pyc
